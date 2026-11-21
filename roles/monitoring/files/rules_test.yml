@@ -48,8 +48,9 @@ tests:
       - series: 'gateway_requests_total{team="ops",model="m",status="503"}'
         values: "0+10x20"
     promql_expr_test:
-      - expr: gateway:error_ratio:rate5m
+      # rounded: rate() maths gives 0.09999999999999999, the rule is about 10%
+      - expr: round(gateway:error_ratio:rate5m, 0.001)
         eval_time: 10m
         exp_samples:
-          - labels: "gateway:error_ratio:rate5m"
+          - labels: "{}"
             value: 0.1
