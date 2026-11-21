@@ -20,8 +20,6 @@ The whole platform is installed on a fresh GitHub runner with a real model on ev
   <img alt="Architecture: people and apps reach the chat UI and the LLM gateway on the ops node with team keys; the gateway calls vLLM on NVIDIA nodes, llama.cpp with Vulkan on AMD/Intel nodes, and llama.cpp on CPU nodes with a backend key; Prometheus and Grafana scrape the gateway and nodes; Ansible provisions every node over SSH; GGUF models come from Hugging Face verified by SHA-256." src="docs/diagrams/architecture-light.svg" width="100%">
 </picture>
 
-<sub>Animated diagrams generated from <a href="docs/diagrams/diagrams.yaml">docs/diagrams/diagrams.yaml</a> with <a href="https://github.com/santoshmyakala/santoshmyakala/tree/main/tools/archdiagram">archdiagram</a>.</sub>
-
 ## Roles
 
 | Role | What it does |
