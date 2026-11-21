@@ -4,6 +4,7 @@ ignore: |
   .git/
   gateway/
   .github/
+  docs/
 rules:
   line-length: {max: 140}
   truthy: {allowed-values: ["true", "false"], check-keys: false}
