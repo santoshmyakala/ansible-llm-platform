@@ -1,0 +1,70 @@
+- out: architecture
+  title: Self-hosted LLM platform, provisioned with Ansible
+  subtitle: Every node hardened with an inventory-driven firewall · one gateway with per-team keys and limits · llama.cpp and vLLM side by side · SLO alerts
+  grid: {dx: 250, dy: 160}
+  groups:
+    - {id: ops, label: Ops node, icon: server, color: blue, box: [1.2, 0, 2.4, 1]}
+    - {id: inf, label: Inference nodes, sub: rolled one at a time, icon: gpu, color: green, box: [3.6, -0.5, 3.6, 1.5]}
+  nodes:
+    - {id: users, label: People and apps, sub: chat · scripts · services, icon: users, at: [0, 0], color: gray}
+    - {id: ansible, label: Ansible, sub: site.yml · verify.yml, icon: ansible, at: [0, 2.05], color: red}
+    - {id: ui, label: Chat UI, sub: Open WebUI · own team key, icon: user, at: [1.2, 0], color: purple}
+    - {id: gw, label: LLM gateway, sub: hashed keys · limits · failover, icon: [gateway, python], at: [2.4, 0], color: blue, pulse: true}
+    - {id: mon, label: Prometheus + Grafana, sub: SLO alerts · dashboard, icon: [prometheus, grafana], at: [1.8, 1], color: amber}
+    - {id: vllm, label: vLLM, sub: NVIDIA · CUDA, icon: [nvidia, model], at: [3.6, -0.5], color: green}
+    - {id: vk, label: llama.cpp, sub: AMD / Intel · Vulkan, icon: [gpu, model], at: [3.6, 0.5], color: green}
+    - {id: cpu, label: llama.cpp, sub: CPU only, icon: [server, model], at: [3.6, 1.5], color: green}
+    - {id: hf, label: Hugging Face, sub: verified by SHA-256, icon: bucket, at: [2.4, 2.05], color: gray}
+  edges:
+    - {from: users, to: ui, label: browser, kind: secure}
+    - {from: ui, to: gw, kind: secure}
+    - {from: users, to: gw, label: OpenAI API + team key, kind: secure, packet: lock, via: [[0, -0.75], [2.4, -0.75]], at: 0.3}
+    - {from: gw, to: vllm, label: backend key, kind: data}
+    - {from: gw, to: vk, kind: data}
+    - {from: gw, to: cpu, kind: data}
+    - {from: mon, to: gw, label: scrape, kind: async}
+    - {from: hf, to: cpu, label: GGUF, kind: control}
+    - {from: ansible, to: mon, label: SSH to every node · idempotent, kind: control, via: [[1.8, 2.05]], at: 0.4}
+
+- out: request-path
+  title: One request, every control it passes
+  subtitle: Network first, then identity, then budget; model servers accept only the gateway, and prompts are never logged
+  grid: {dx: 240, dy: 150}
+  nodes:
+    - {id: client, label: Client, sub: Bearer team key, icon: user, at: [0, 0], color: gray}
+    - {id: fw, label: Host firewall, sub: nftables · client networks only, icon: firewall, at: [1, 0], color: red}
+    - {id: auth, label: Authenticate, sub: SHA-256 · constant time, icon: key, at: [2, 0], color: purple}
+    - {id: limit, label: Team limits, sub: requests + tokens / min, icon: shield, at: [3, 0], color: amber}
+    - {id: route, label: Route, sub: healthy · least in flight, icon: gateway, at: [4, 0], color: blue, pulse: true}
+    - {id: fw2, label: Node firewall, sub: gateway + monitoring only, icon: firewall, at: [4, 1.05], color: red}
+    - {id: model, label: Model server, sub: backend key · node IP only, icon: model, at: [3, 1.05], color: green}
+    - {id: metrics, label: Metrics + access log, sub: tokens per team · no prompts, icon: chart, at: [1.5, 1.05], color: teal}
+  edges:
+    - {from: client, to: fw, kind: secure, packet: lock}
+    - {from: fw, to: auth, kind: secure}
+    - {from: auth, to: limit, label: 401 if unknown, kind: data}
+    - {from: limit, to: route, label: 429 + Retry-After, kind: data}
+    - {from: route, to: fw2, label: fail over on 5xx, kind: data}
+    - {from: fw2, to: model, kind: data, packet: doc}
+    - {from: model, to: metrics, label: usage, kind: async}
+
+- out: github-actions
+  title: Delivery with GitHub Actions
+  subtitle: The whole platform is installed on a fresh runner with a real model, re-run to prove idempotence, verified end to end and benchmarked
+  grid: {dx: 255, dy: 150}
+  nodes:
+    - {id: pr, label: Push / pull request, icon: git, at: [0, 0], color: gray}
+    - {id: lint, label: Lint, sub: ansible-lint production · yamllint, icon: [ansible, check], at: [1, 0], color: red}
+    - {id: gw, label: Gateway, sub: 26 tests · image · Trivy, icon: [python, trivy], at: [1, 1], color: blue}
+    - {id: conv, label: Converge, sub: every role · real model, icon: [ansible, server], at: [2, 0.5], color: green, pulse: true}
+    - {id: idem, label: Second run, sub: must change nothing, icon: check, at: [3, 0.5], color: green}
+    - {id: ver, label: verify.yml, sub: answers · 401 · 429 · failover, icon: [shield, check], at: [4, 0], color: purple}
+    - {id: bench, label: Benchmark, sub: TTFT · tokens/s · job summary, icon: chart, at: [4, 1], color: amber}
+  edges:
+    - {from: pr, to: lint, kind: control}
+    - {from: pr, to: gw, kind: control, via: [[0, 1]]}
+    - {from: lint, to: conv, kind: data}
+    - {from: gw, to: conv, kind: data}
+    - {from: conv, to: idem, kind: data}
+    - {from: idem, to: ver, kind: secure}
+    - {from: idem, to: bench, kind: async}
