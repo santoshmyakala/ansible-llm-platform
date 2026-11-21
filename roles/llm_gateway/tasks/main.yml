@@ -1,0 +1,91 @@
+---
+- name: Create the gateway directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ llm_gateway_dir }}"
+    - "{{ llm_gateway_dir }}/src"
+
+- name: Copy the gateway source
+  ansible.builtin.copy:
+    src: "{{ llm_gateway_source }}/{{ item }}"
+    dest: "{{ llm_gateway_dir }}/src/"
+    owner: root
+    group: root
+    mode: preserve
+  loop: [Dockerfile, .dockerignore, pyproject.toml, llm_gateway]
+  register: llm_gateway_src
+
+- name: Build the gateway image when the source changed
+  community.docker.docker_image:
+    name: "{{ llm_gateway_image }}"
+    source: build
+    force_source: "{{ llm_gateway_src.changed }}"
+    build:
+      path: "{{ llm_gateway_dir }}/src"
+      pull: false
+
+- name: Render the gateway configuration (team keys only as SHA-256)
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ llm_gateway_dir }}/config.next.yml"
+    owner: root
+    group: "{{ llm_gateway_uid }}"
+    mode: "0640"
+  register: llm_gateway_next
+  no_log: true
+
+- name: Validate the new configuration with the gateway itself
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network=none
+      - --user={{ llm_gateway_uid }}:{{ llm_gateway_uid }}
+      - --volume={{ llm_gateway_dir }}/config.next.yml:/etc/llm-gateway/config.yml:ro
+      - "{{ llm_gateway_image }}"
+      - --check
+  changed_when: false
+
+- name: Put the validated configuration in place
+  ansible.builtin.copy:
+    src: "{{ llm_gateway_dir }}/config.next.yml"
+    dest: "{{ llm_gateway_dir }}/config.yml"
+    remote_src: true
+    owner: root
+    group: "{{ llm_gateway_uid }}"
+    mode: "0640"
+  register: llm_gateway_config
+  no_log: true
+
+- name: Run the gateway
+  community.docker.docker_container:
+    name: llm-gateway
+    image: "{{ llm_gateway_image }}"
+    network_mode: host
+    user: "{{ llm_gateway_uid }}:{{ llm_gateway_uid }}"
+    read_only: true
+    restart_policy: unless-stopped
+    restart: "{{ llm_gateway_config.changed }}"
+    volumes:
+      - "{{ llm_gateway_dir }}/config.yml:/etc/llm-gateway/config.yml:ro"
+    command:
+      - --config=/etc/llm-gateway/config.yml
+      - --host={{ llm_gateway_bind_address }}
+      - --port={{ platform_ports.gateway_api }}
+      - --metrics-port={{ platform_ports.gateway_metrics }}
+    labels:
+      llm-platform.component: gateway
+
+- name: Wait until the gateway reaches at least one healthy backend
+  ansible.builtin.uri:
+    url: "http://{{ llm_gateway_bind_address }}:{{ platform_ports.gateway_api }}/readyz"
+  register: llm_gateway_ready
+  until: llm_gateway_ready.status == 200
+  retries: 30
+  delay: 2

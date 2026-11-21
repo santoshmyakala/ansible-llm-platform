@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+[Unit]
+Description=LLM platform host firewall (nftables table inet llm_platform)
+Documentation=file:///etc/llm-platform/firewall.nft
+DefaultDependencies=no
+Before=network-pre.target docker.service
+Wants=network-pre.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/llm-platform/firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/llm-platform/firewall.nft
+# Remove only this project's table; `nft flush ruleset` would also wipe Docker's rules.
+ExecStop=/usr/sbin/nft delete table inet llm_platform
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,37 @@
+---
+# The kernel driver is a host concern (matched to the GPU and kernel); this role checks for it rather
+# than installing one.
+- name: Check the NVIDIA driver is installed
+  ansible.builtin.command: nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+  register: nvidia_toolkit_smi
+  changed_when: false
+  failed_when: nvidia_toolkit_smi.rc != 0
+
+- name: Show the GPUs found
+  ansible.builtin.debug:
+    msg: "{{ nvidia_toolkit_smi.stdout_lines }}"
+
+- name: Add NVIDIA's container toolkit repository
+  ansible.builtin.deb822_repository:
+    name: nvidia-container-toolkit
+    types: [deb]
+    uris: "{{ nvidia_toolkit_repo }}/$(ARCH)"
+    suites: ["/"]
+    signed_by: "{{ nvidia_toolkit_key_url }}"
+
+- name: Install the NVIDIA Container Toolkit
+  ansible.builtin.apt:
+    name: nvidia-container-toolkit
+    state: present
+    update_cache: true
+
+- name: Read daemon.json
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: nvidia_toolkit_daemon
+
+- name: Register the nvidia runtime with Docker (only if missing)
+  ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+  when: "'nvidia' not in ((nvidia_toolkit_daemon.content | b64decode | from_json).runtimes | default({}))"
+  changed_when: true
+  notify: Restart docker

@@ -1,0 +1,41 @@
+---
+- name: "Create the Hugging Face cache | {{ inference_item.name }}"
+  ansible.builtin.file:
+    path: "{{ inference_hf_cache }}"
+    state: directory
+    mode: "0755"
+
+- name: "Run vLLM on NVIDIA GPUs | {{ inference_item.name }}"
+  vars:
+    inference_max_model_len: >-
+      {{ inference_item.max_model_len | default(platform_models[inference_item.model].max_model_len | default(8192)) }}
+  community.docker.docker_container:
+    name: "llm-{{ inference_item.name }}"
+    image: "{{ platform_images.vllm }}"
+    network_mode: host
+    ipc_mode: host # PyTorch uses shared memory between processes for tensor parallelism
+    restart_policy: unless-stopped
+    device_requests:
+      - driver: nvidia
+        count: -1
+        capabilities: [[gpu]]
+    volumes:
+      - "{{ inference_hf_cache }}:/root/.cache/huggingface"
+    env:
+      VLLM_API_KEY: "{{ vault_backend_api_key }}"
+      HF_TOKEN: "{{ vault_hf_token | default('') }}"
+    # vLLM's image runs `vllm serve`, so the model comes first.
+    command: >-
+      {{ [platform_models[inference_item.model].hf_model,
+          '--served-model-name', inference_item.model,
+          '--host', inference_bind_address,
+          '--port', inference_item.port | string,
+          '--max-model-len', inference_max_model_len | string,
+          '--gpu-memory-utilization', inference_item.gpu_memory_utilization | default(0.9) | string,
+          '--tensor-parallel-size', inference_item.tensor_parallel_size | default(1) | string]
+         + (inference_item.extra_args | default([])) }}
+    labels:
+      llm-platform.component: inference
+      llm-platform.engine: vllm
+      llm-platform.model: "{{ inference_item.model }}"
+  no_log: true # env holds the backend key

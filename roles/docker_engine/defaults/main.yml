@@ -1,0 +1,14 @@
+---
+# Reuse a Docker engine that is already installed (CI runners ship one) instead of installing Docker CE.
+docker_engine_reuse_existing: false
+docker_engine_packages: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin]
+docker_engine_conflicting_packages: [docker.io, docker-doc, docker-compose, docker-compose-v2, podman-docker, containerd, runc]
+# Merged into /etc/docker/daemon.json; keys already there (e.g. GPU runtimes) are kept.
+docker_engine_daemon_config:
+  log-driver: local
+  log-opts:
+    max-size: 20m
+    max-file: "5"
+  live-restore: true # model servers keep running while dockerd restarts
+  userland-proxy: false
+  no-new-privileges: true

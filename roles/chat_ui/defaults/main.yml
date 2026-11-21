@@ -1,0 +1,6 @@
+---
+chat_ui_dir: "{{ platform_base_dir }}/chat-ui"
+chat_ui_listen: "{{ platform_address }}"
+# The gateway the UI talks to (first gateway host by default).
+chat_ui_gateway_url: "http://{{ hostvars[groups['gateway'][0]].platform_address }}:{{ platform_ports.gateway_api }}/v1"
+chat_ui_health_retries: 60

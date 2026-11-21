@@ -1,0 +1,54 @@
+---
+# Deploy or update the whole platform. Safe to re-run: a second run changes nothing.
+#   ansible-playbook -i inventories/<site> playbooks/site.yml --ask-vault-pass
+
+- name: Preflight checks (fail before anything changes)
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Check inventory, secrets and hosts
+      ansible.builtin.import_role:
+        name: platform
+        tasks_from: preflight
+
+- name: Harden every node and give it a container engine and host metrics
+  hosts: all
+  become: true
+  roles:
+    - platform
+    - hardening
+    - docker_engine
+    - role: nvidia_toolkit
+      when: platform_gpu_vendor == 'nvidia'
+    - node_exporter
+
+# One node at a time: the gateway routes around a node while its models restart.
+- name: Download models and run the model servers
+  hosts: inference
+  become: true
+  serial: "{{ platform_inference_serial | default(1) }}"
+  roles:
+    - platform
+    - model_cache
+    - inference
+
+- name: Run the API gateway
+  hosts: gateway
+  become: true
+  roles:
+    - platform
+    - llm_gateway
+
+- name: Run monitoring and alerting
+  hosts: monitoring
+  become: true
+  roles:
+    - platform
+    - monitoring
+
+- name: Run the chat UI
+  hosts: chat_ui
+  become: true
+  roles:
+    - platform
+    - chat_ui

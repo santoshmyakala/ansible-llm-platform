@@ -1,0 +1,103 @@
+---
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables, unattended-upgrades, python3-requests]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# --------------------------------------------------------------------------- SSH
+- name: Ensure the privilege-separation directory exists (needed to validate sshd config)
+  ansible.builtin.file:
+    path: /run/sshd
+    state: directory
+    mode: "0755"
+
+- name: Harden sshd (drop-in, read before the distribution defaults)
+  ansible.builtin.template:
+    src: sshd.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-llm-platform.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd
+
+# --------------------------------------------------------------------------- kernel
+- name: Apply kernel hardening
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/60-llm-platform.conf
+    reload: true
+  loop: "{{ hardening_sysctl | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# --------------------------------------------------------------------------- updates
+- name: Configure unattended security upgrades
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/apt/apt.conf.d/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [20auto-upgrades, 52llm-platform-upgrades]
+  when: hardening_unattended_upgrades
+
+# --------------------------------------------------------------------------- firewall
+- name: Refuse to apply a firewall that would cut off this SSH session
+  ansible.builtin.command:
+    argv: "{{ ['python3', '-c', hardening_lockout_script] + platform_admin_networks }}"
+  vars:
+    hardening_lockout_script: |
+      import ipaddress, os, sys
+      client = (os.environ.get("SSH_CLIENT") or "").split(" ")[0]
+      if not client:
+          sys.exit(0)  # not over SSH (local connection or console)
+      ok = any(ipaddress.ip_address(client) in ipaddress.ip_network(n, strict=False) for n in sys.argv[1:])
+      print(f"ssh client {client} {'is' if ok else 'is NOT'} in {sys.argv[1:]}")
+      sys.exit(0 if ok else 1)
+  changed_when: false
+  when: hardening_firewall_enabled and hardening_lockout_check and ansible_connection | default('ssh') != 'local'
+
+- name: Create the firewall configuration directory
+  ansible.builtin.file:
+    path: /etc/llm-platform
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  when: hardening_firewall_enabled
+
+- name: Render the firewall ruleset (only table inet llm_platform; Docker's tables are untouched)
+  ansible.builtin.template:
+    src: firewall.nft.j2
+    dest: /etc/llm-platform/firewall.nft
+    owner: root
+    group: root
+    mode: "0640"
+    validate: nft -c -f %s
+  notify: Reload firewall
+  when: hardening_firewall_enabled
+
+- name: Install the firewall unit (removes only its own table on stop)
+  ansible.builtin.template:
+    src: llm-platform-firewall.service.j2
+    dest: /etc/systemd/system/llm-platform-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload firewall
+  when: hardening_firewall_enabled
+
+- name: Enable the firewall at boot and now
+  ansible.builtin.systemd_service:
+    name: llm-platform-firewall.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: hardening_firewall_enabled
+
+- name: Apply firewall and SSH changes before services start
+  ansible.builtin.meta: flush_handlers

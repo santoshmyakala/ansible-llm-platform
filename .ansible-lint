@@ -1,0 +1,7 @@
+---
+profile: production
+exclude_paths:
+  - .github/
+  - gateway/
+  - docs/
+  - inventories/ci/group_vars/all/secrets.yml

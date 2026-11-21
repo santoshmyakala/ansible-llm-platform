@@ -1,0 +1,15 @@
+// {{ ansible_managed }}
+// Security updates only, never an automatic reboot, and never the container engine or GPU stack
+// (an upgrade there restarts every model server; do those in a planned, rolling window).
+Unattended-Upgrade::Allowed-Origins {
+        "${distro_id}:${distro_codename}-security";
+        "${distro_id}ESMApps:${distro_codename}-apps-security";
+        "${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Package-Blacklist {
+{% for pkg in hardening_upgrade_blocklist %}
+        "{{ pkg }}";
+{% endfor %}
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";

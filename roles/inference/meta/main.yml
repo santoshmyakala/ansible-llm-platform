@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Santoshkumar Myakala
+  description: Runs llama.cpp (CPU, CUDA, Vulkan) and vLLM (NVIDIA) model servers from the inventory.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

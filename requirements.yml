@@ -1,0 +1,8 @@
+---
+# Collections used by the roles (pinned). `pip install -r requirements-dev.txt` already ships them inside
+# the `ansible` package; run `ansible-galaxy collection install -r requirements.yml` when using ansible-core.
+collections:
+  - name: ansible.posix
+    version: 2.1.0
+  - name: community.docker
+    version: 4.8.5

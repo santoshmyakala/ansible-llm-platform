@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Santoshkumar Myakala
+  description: NVIDIA Container Toolkit so containers can request GPUs (driver must already be installed).
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

@@ -1,0 +1,16 @@
+---
+# Two instances of the same model on one host stand in for two inference nodes,
+# so CI exercises routing and failover.
+platform_inference_instances:
+  - name: qwen-a
+    model: qwen2.5-0.5b-instruct
+    port: 8081
+    ctx_size: 4096
+    parallel: 2
+    threads: 2
+  - name: qwen-b
+    model: qwen2.5-0.5b-instruct
+    port: 8082
+    ctx_size: 4096
+    parallel: 2
+    threads: 2

@@ -1,0 +1,35 @@
+---
+# Shared defaults for every role. Override in inventory group_vars/host_vars.
+platform_base_dir: /opt/llm-platform
+platform_admin_networks: []
+platform_client_networks: []
+platform_models: {}
+platform_gpu_vendor: none # none | nvidia | amd | intel
+platform_inference_instances: []
+platform_chat_ui_team: chat-ui
+platform_alert_webhook_url: ""
+
+platform_images:
+  llamacpp_cpu: ghcr.io/ggml-org/llama.cpp:server-b12407
+  llamacpp_cuda: ghcr.io/ggml-org/llama.cpp:server-cuda-b12407
+  llamacpp_vulkan: ghcr.io/ggml-org/llama.cpp:server-vulkan-b12407
+  vllm: vllm/vllm-openai:v0.33.0
+  prometheus: prom/prometheus:v3.15.1
+  alertmanager: prom/alertmanager:v0.34.2
+  grafana: grafana/grafana:13.3.0
+  node_exporter: prom/node-exporter:v1.12.1
+  open_webui: ghcr.io/open-webui/open-webui:v0.13.3
+
+platform_ports:
+  gateway_api: 8000
+  gateway_metrics: 9400
+  node_exporter: 9100
+  grafana: 3000
+  chat_ui: 3080
+  prometheus: 9090
+  alertmanager: 9093
+
+platform_slo:
+  ttft_p95_seconds: 2.0
+  error_ratio: 0.02
+  queue_depth: 8

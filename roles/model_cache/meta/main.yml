@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Santoshkumar Myakala
+  description: Downloads GGUF models and verifies them against the publisher's SHA-256 (or a pinned hash).
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

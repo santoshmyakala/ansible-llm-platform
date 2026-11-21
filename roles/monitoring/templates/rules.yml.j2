@@ -1,0 +1,106 @@
+# {{ ansible_managed }}
+# Recording rules give both engines (llama.cpp, vLLM) the same names; alerts are built on those
+# and on the gateway's own metrics, with thresholds from platform_slo.
+groups:
+  - name: llm-platform-recording
+    rules:
+      - record: platform:generated_tokens:rate1m
+        expr: sum by (model) (rate(llamacpp:tokens_predicted_total[1m]) or rate(vllm:generation_tokens_total[1m]))
+      - record: platform:prompt_tokens:rate1m
+        expr: sum by (model) (rate(llamacpp:prompt_tokens_total[1m]) or rate(vllm:prompt_tokens_total[1m]))
+      - record: platform:requests_running
+        expr: sum by (model) (llamacpp:requests_processing or vllm:num_requests_running)
+      - record: platform:requests_waiting
+        expr: sum by (model) (llamacpp:requests_deferred or vllm:num_requests_waiting)
+      - record: gateway:ttft_seconds:p50_5m
+        expr: histogram_quantile(0.50, sum by (le, model) (rate(gateway_time_to_first_token_seconds_bucket[5m])))
+      - record: gateway:ttft_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, model) (rate(gateway_time_to_first_token_seconds_bucket[5m])))
+      - record: gateway:request_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, model) (rate(gateway_request_duration_seconds_bucket[5m])))
+      - record: gateway:requests:rate5m
+        expr: sum by (team, model, status) (rate(gateway_requests_total[5m]))
+      - record: gateway:error_ratio:rate5m
+        expr: >-
+          sum(rate(gateway_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(gateway_requests_total[5m])), 1e-9)
+      - record: gateway:tokens:rate1h
+        expr: sum by (team, kind) (rate(gateway_tokens_total[1h]))
+
+  - name: llm-platform-alerts
+    rules:
+      - alert: NodeDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: {% raw %}"Node {{ $labels.node }} is not reporting metrics"{% endraw %}
+
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: {% raw %}"Gateway on {{ $labels.node }} is down"{% endraw %}
+
+      - alert: ModelServerDown
+        expr: gateway_backend_up == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: {% raw %}"Backend {{ $labels.backend }} fails health checks; traffic is going to the others"{% endraw %}
+
+      - alert: NoHealthyBackends
+        expr: sum(gateway_backend_up) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "No model server is healthy: every request fails"
+
+      - alert: GatewayErrorRateHigh
+        expr: gateway:error_ratio:rate5m > {{ platform_slo.error_ratio }}
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than {{ (platform_slo.error_ratio * 100) | round(1) }}% of requests fail with 5xx"
+
+      - alert: TimeToFirstTokenSlow
+        expr: gateway:ttft_seconds:p95_5m > {{ platform_slo.ttft_p95_seconds }}
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: {% raw %}"p95 time to first token for {{ $labels.model }} is above{% endraw %} {{ platform_slo.ttft_p95_seconds }}s"
+
+      - alert: RequestsQueueing
+        expr: platform:requests_waiting > {{ platform_slo.queue_depth }}
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: {% raw %}"Requests are queueing for {{ $labels.model }}: add capacity or lower team limits"{% endraw %}
+
+      - alert: TeamThrottled
+        expr: sum by (team) (increase(gateway_rate_limited_total[15m])) > 20
+        labels: {severity: info}
+        annotations:
+          summary: {% raw %}"Team {{ $labels.team }} keeps hitting its rate limit"{% endraw %}
+
+      - alert: KVCacheNearlyFull
+        expr: max by (model, instance) (vllm:kv_cache_usage_perc) > 0.95
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: {% raw %}"vLLM KV cache for {{ $labels.model }} is above 95%"{% endraw %}
+
+      - alert: DiskAlmostFull
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.10
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: {% raw %}"{{ $labels.node }}:{{ $labels.mountpoint }} has under 10% free (models need space)"{% endraw %}
+
+      - alert: MemoryPressure
+        expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.95
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: {% raw %}"{{ $labels.node }} memory is above 95% used"{% endraw %}

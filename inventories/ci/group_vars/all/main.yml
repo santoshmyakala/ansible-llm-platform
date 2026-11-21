@@ -1,0 +1,16 @@
+---
+platform_base_dir: /opt/llm-platform
+platform_admin_networks: [127.0.0.0/8]
+platform_client_networks: [127.0.0.0/8]
+
+# A small model that runs on the runner's CPU.
+platform_models:
+  qwen2.5-0.5b-instruct:
+    engine: llamacpp
+    hf_repo: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+    hf_file: qwen2.5-0.5b-instruct-q4_k_m.gguf
+    revision: main
+    sha256: ""
+
+# The runner already ships Docker; configure it instead of reinstalling.
+docker_engine_reuse_existing: true

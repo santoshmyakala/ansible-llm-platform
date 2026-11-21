@@ -1,0 +1,171 @@
+---
+- name: Create the monitoring directories
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "0755"
+  loop:
+    - {path: prometheus, owner: "0"}
+    - {path: prometheus-data, owner: "65534"}
+    - {path: alertmanager, owner: "0"}
+    - {path: alertmanager-data, owner: "65534"}
+    - {path: grafana/provisioning/datasources, owner: "0"}
+    - {path: grafana/provisioning/dashboards, owner: "0"}
+    - {path: grafana/dashboards, owner: "0"}
+    - {path: grafana-data, owner: "472"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the key Prometheus uses to scrape model servers
+  ansible.builtin.copy:
+    dest: "{{ monitoring_dir }}/prometheus/backend.key"
+    content: "{{ vault_backend_api_key }}"
+    owner: "65534"
+    group: "65534"
+    mode: "0400"
+  no_log: true
+
+- name: Render the Prometheus configuration and rules
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ monitoring_dir }}/prometheus/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [prometheus.yml, rules.yml]
+  register: monitoring_prometheus_cfg
+
+- name: Copy the alert unit tests
+  ansible.builtin.copy:
+    src: rules_test.yml
+    dest: "{{ monitoring_dir }}/prometheus/rules_test.yml"
+    mode: "0644"
+
+- name: Check the Prometheus configuration and run the alert unit tests
+  ansible.builtin.command:
+    argv: [docker, run, --rm, --network=none, --entrypoint=/bin/sh,
+           "--volume={{ monitoring_dir }}/prometheus:/etc/prometheus:ro", "{{ platform_images.prometheus }}",
+           -c, "promtool check config /etc/prometheus/prometheus.yml && cd /etc/prometheus && promtool test rules rules_test.yml"]
+  changed_when: false
+
+- name: Render the Alertmanager configuration
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_dir }}/alertmanager/alertmanager.yml"
+    mode: "0644"
+  register: monitoring_alertmanager_cfg
+
+- name: Check the Alertmanager configuration
+  ansible.builtin.command:
+    argv: [docker, run, --rm, --network=none, --entrypoint=amtool,
+           "--volume={{ monitoring_dir }}/alertmanager:/etc/alertmanager:ro", "{{ platform_images.alertmanager }}",
+           check-config, /etc/alertmanager/alertmanager.yml]
+  changed_when: false
+
+- name: Provision Grafana (data source, dashboard provider, dashboard)
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ monitoring_dir }}/grafana/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - {src: dashboard-provider.yml, dest: provisioning/dashboards/llm-platform.yml}
+    - {src: dashboards/llm-platform.json, dest: dashboards/llm-platform.json}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: monitoring_grafana_files
+
+- name: Provision the Grafana data source
+  ansible.builtin.template:
+    src: datasource.yml.j2
+    dest: "{{ monitoring_dir }}/grafana/provisioning/datasources/prometheus.yml"
+    mode: "0644"
+  register: monitoring_grafana_ds
+
+- name: Write the Grafana admin password
+  ansible.builtin.copy:
+    dest: "{{ monitoring_dir }}/grafana/admin_password"
+    content: "{{ vault_grafana_admin_password }}"
+    owner: "472"
+    group: "472"
+    mode: "0400"
+  no_log: true
+
+- name: Run Prometheus (localhost only)
+  community.docker.docker_container:
+    name: prometheus
+    image: "{{ platform_images.prometheus }}"
+    network_mode: host
+    user: "65534:65534"
+    read_only: true
+    restart_policy: unless-stopped
+    restart: "{{ monitoring_prometheus_cfg.changed }}"
+    volumes:
+      - "{{ monitoring_dir }}/prometheus:/etc/prometheus:ro"
+      - "{{ monitoring_dir }}/prometheus-data:/prometheus"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time={{ monitoring_retention }}
+      - --web.listen-address=127.0.0.1:{{ platform_ports.prometheus }}
+    labels:
+      llm-platform.component: prometheus
+
+- name: Run Alertmanager (localhost only)
+  community.docker.docker_container:
+    name: alertmanager
+    image: "{{ platform_images.alertmanager }}"
+    network_mode: host
+    user: "65534:65534"
+    read_only: true
+    restart_policy: unless-stopped
+    restart: "{{ monitoring_alertmanager_cfg.changed }}"
+    volumes:
+      - "{{ monitoring_dir }}/alertmanager:/etc/alertmanager:ro"
+      - "{{ monitoring_dir }}/alertmanager-data:/alertmanager"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=127.0.0.1:{{ platform_ports.alertmanager }}
+      - --cluster.listen-address=
+    labels:
+      llm-platform.component: alertmanager
+
+- name: Run Grafana
+  community.docker.docker_container:
+    name: grafana
+    image: "{{ platform_images.grafana }}"
+    network_mode: host
+    user: "472:472"
+    restart_policy: unless-stopped
+    restart: "{{ monitoring_grafana_files.changed or monitoring_grafana_ds.changed }}"
+    volumes:
+      - "{{ monitoring_dir }}/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - "{{ monitoring_dir }}/grafana/dashboards:/var/lib/grafana/dashboards:ro"
+      - "{{ monitoring_dir }}/grafana/admin_password:/run/secrets/grafana_admin:ro"
+      - "{{ monitoring_dir }}/grafana-data:/var/lib/grafana"
+    env:
+      GF_SERVER_HTTP_ADDR: "{{ monitoring_grafana_listen }}"
+      GF_SERVER_HTTP_PORT: "{{ platform_ports.grafana | string }}"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_LOG_MODE: console
+    labels:
+      llm-platform.component: grafana
+
+- name: Wait for Prometheus, Alertmanager and Grafana
+  ansible.builtin.uri:
+    url: "{{ item }}"
+  register: monitoring_up
+  until: monitoring_up.status == 200
+  retries: 30
+  delay: 2
+  loop:
+    - "http://127.0.0.1:{{ platform_ports.prometheus }}/-/ready"
+    - "http://127.0.0.1:{{ platform_ports.alertmanager }}/-/ready"
+    - "http://{{ monitoring_grafana_listen }}:{{ platform_ports.grafana }}/api/health"

@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+# Team keys appear only as SHA-256 digests. The backend key lets the gateway call the model servers.
+backends:
+{% for host in groups.get('inference', []) %}
+{%   for inst in hostvars[host].platform_inference_instances | default([]) %}
+  - name: "{{ (host ~ '-' ~ inst.name) | lower | regex_replace('[^a-z0-9._-]', '-') }}"
+    url: "http://{{ hostvars[host].platform_address }}:{{ inst.port }}"
+    models: ["{{ inst.model }}"]
+    api_key: "{{ vault_backend_api_key }}"
+{%   endfor %}
+{% endfor %}
+teams:
+{% for team in vault_gateway_teams %}
+  - name: "{{ team.name }}"
+    key_sha256: "{{ team.key | hash('sha256') }}"
+    requests_per_minute: {{ team.requests_per_minute }}
+    tokens_per_minute: {{ team.tokens_per_minute }}
+    models: {{ team.models | default(['*']) | to_json }}
+{% endfor %}
+options:
+  connect_timeout: {{ llm_gateway_connect_timeout }}
+  read_timeout: {{ llm_gateway_read_timeout }}
+  health_interval: {{ llm_gateway_health_interval }}
+  unhealthy_after: {{ llm_gateway_unhealthy_after }}
+  max_body_bytes: {{ llm_gateway_max_body_bytes }}

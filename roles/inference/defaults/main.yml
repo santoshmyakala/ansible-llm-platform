@@ -1,0 +1,9 @@
+---
+inference_bind_address: "{{ platform_address }}"
+inference_dir: "{{ platform_base_dir }}/inference"
+inference_model_dir: "{{ platform_base_dir }}/models"
+inference_hf_cache: "{{ platform_base_dir }}/hf-cache"
+# Model loading time differs a lot: a small GGUF on CPU is seconds, a 70B on vLLM is minutes.
+inference_health_retries: 60
+inference_health_delay: 5
+inference_vllm_health_retries: 180

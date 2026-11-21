@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Santoshkumar Myakala
+  description: SSH, kernel and unattended-upgrade hardening, and an inventory-driven nftables firewall that coexists with Docker.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

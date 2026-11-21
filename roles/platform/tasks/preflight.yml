@@ -1,0 +1,70 @@
+---
+# Fail fast, before anything changes on the hosts.
+- name: Check the operating system is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_version is version('22.04', '>=')
+    fail_msg: "Supported: Ubuntu 22.04 and 24.04 (found {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }})."
+    quiet: true
+
+- name: Check the host has an address other nodes can use
+  ansible.builtin.assert:
+    that:
+      - platform_address is defined
+      - platform_address is match('^[0-9.]+$|^[0-9a-fA-F:]+$')
+    fail_msg: "Set platform_address (an IP address, not a hostname) for {{ inventory_hostname }}; firewall rules are built from it."
+    quiet: true
+
+- name: Check the access networks are set
+  ansible.builtin.assert:
+    that:
+      - platform_admin_networks | length > 0
+      - platform_client_networks | length > 0
+    fail_msg: "platform_admin_networks and platform_client_networks must not be empty (they drive the firewall)."
+    quiet: true
+
+- name: Check the secrets are present and strong enough
+  ansible.builtin.assert:
+    that:
+      - vault_backend_api_key is defined and vault_backend_api_key | length >= 32
+      - vault_gateway_teams is defined and vault_gateway_teams | length > 0
+      - vault_gateway_teams | map(attribute='key') | map('length') | min >= 32
+      - vault_gateway_teams | map(attribute='name') | unique | length == vault_gateway_teams | length
+      - vault_gateway_teams | map(attribute='key') | unique | length == vault_gateway_teams | length
+    fail_msg: >-
+      Secrets missing or weak: need vault_backend_api_key (>= 32 chars) and vault_gateway_teams with unique
+      names and unique keys of >= 32 chars each. See inventories/example/group_vars/all/vault.yml.example.
+    quiet: true
+  no_log: true
+
+- name: Check every inference instance refers to a model in the catalog, on a unique port
+  ansible.builtin.assert:
+    that:
+      - item.model in platform_models
+      - item.port is integer
+      - platform_inference_instances | map(attribute='port') | select('equalto', item.port) | list | length == 1
+      - item.name is match('^[a-z0-9][a-z0-9_.-]*$')
+    fail_msg: "Instance {{ item.name | default('?') }}: model must be in platform_models, port unique on the host, name lowercase."
+    quiet: true
+  loop: "{{ platform_inference_instances }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Check vLLM runs only on NVIDIA hosts
+  ansible.builtin.assert:
+    that: platform_gpu_vendor == 'nvidia'
+    fail_msg: "{{ item.name }} uses vLLM, which this platform deploys on NVIDIA GPUs only; use llama.cpp elsewhere."
+    quiet: true
+  loop: "{{ platform_inference_instances | selectattr('model', 'in', platform_vllm_models) | list }}"
+  vars:
+    platform_vllm_models: "{{ platform_models | dict2items | selectattr('value.engine', 'equalto', 'vllm') | map(attribute='key') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Check the chat UI has a gateway team to use
+  ansible.builtin.assert:
+    that: platform_chat_ui_team in (vault_gateway_teams | map(attribute='name') | list)
+    fail_msg: "The chat UI needs a gateway team named {{ platform_chat_ui_team }} in vault_gateway_teams."
+    quiet: true
+  when: groups['chat_ui'] | default([]) | length > 0

@@ -1,0 +1,55 @@
+# {{ ansible_managed }}
+{% set ns = namespace(llamacpp=[], vllm=[]) %}
+{% for host in groups.get('inference', []) %}
+{%   for inst in hostvars[host].platform_inference_instances | default([]) %}
+{%     set target = {'host': host, 'addr': hostvars[host].platform_address ~ ':' ~ inst.port, 'name': inst.name, 'model': inst.model} %}
+{%     if platform_models[inst.model].engine == 'vllm' %}{% set ns.vllm = ns.vllm + [target] %}{% else %}{% set ns.llamacpp = ns.llamacpp + [target] %}{% endif %}
+{%   endfor %}
+{% endfor %}
+global:
+  scrape_interval: {{ monitoring_scrape_interval }}
+  evaluation_interval: {{ monitoring_scrape_interval }}
+  external_labels:
+    platform: llm
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["127.0.0.1:{{ platform_ports.alertmanager }}"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:{{ platform_ports.prometheus }}"]
+
+  - job_name: node
+    static_configs:
+{% for host in groups['all'] %}
+      - targets: ["{{ hostvars[host].platform_address }}:{{ platform_ports.node_exporter }}"]
+        labels: {node: "{{ host }}"}
+{% endfor %}
+{% if groups.get('gateway', []) %}
+
+  - job_name: gateway
+    static_configs:
+{%   for host in groups['gateway'] %}
+      - targets: ["{{ hostvars[host].platform_address }}:{{ platform_ports.gateway_metrics }}"]
+        labels: {node: "{{ host }}"}
+{%   endfor %}
+{% endif %}
+{% for engine, targets in [('llamacpp', ns.llamacpp), ('vllm', ns.vllm)] if targets %}
+
+  # {{ engine }} serves /metrics behind the backend API key
+  - job_name: {{ engine }}
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/backend.key
+    static_configs:
+{%   for t in targets %}
+      - targets: ["{{ t.addr }}"]
+        labels: {node: "{{ t.host }}", instance_name: "{{ t.name }}", model: "{{ t.model }}"}
+{%   endfor %}
+{% endfor %}

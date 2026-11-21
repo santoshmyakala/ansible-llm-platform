@@ -1,0 +1,57 @@
+---
+- name: Create the inference directory
+  ansible.builtin.file:
+    path: "{{ inference_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# llama.cpp reads the key from a file, so it never appears in `docker inspect` or `ps`.
+- name: Write the backend API key for the model servers
+  ansible.builtin.copy:
+    dest: "{{ inference_dir }}/backend.key"
+    content: "{{ vault_backend_api_key }}"
+    owner: "65534"
+    group: "65534"
+    mode: "0400"
+  no_log: true
+
+- name: Find the GPU device groups (AMD/Intel)
+  ansible.builtin.getent:
+    database: group
+  when: platform_gpu_vendor in ['amd', 'intel']
+
+- name: Run each model server
+  ansible.builtin.include_tasks: "{{ platform_models[inference_item.model].engine }}.yml"
+  loop: "{{ platform_inference_instances }}"
+  loop_control:
+    loop_var: inference_item
+    label: "{{ inference_item.name }} ({{ inference_item.model }}, {{ platform_models[inference_item.model].engine }})"
+
+- name: List the model servers this project runs on the host
+  community.docker.docker_host_info:
+    containers: true
+    containers_all: true
+    containers_filters:
+      label: "llm-platform.component=inference"
+  register: inference_running
+
+- name: Remove model servers no longer in the inventory
+  community.docker.docker_container:
+    name: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ inference_running.containers | map(attribute='Names') | map('first') | map('regex_replace', '^/', '')
+       | difference(platform_inference_instances | map(attribute='name') | map('regex_replace', '^', 'llm-')) | list }}
+
+- name: Wait until every model is loaded and healthy
+  ansible.builtin.uri:
+    url: "http://{{ inference_bind_address }}:{{ item.port }}/health"
+  register: inference_health
+  until: inference_health.status == 200
+  retries: "{{ inference_vllm_health_retries if platform_models[item.model].engine == 'vllm' else inference_health_retries }}"
+  delay: "{{ inference_health_delay }}"
+  loop: "{{ platform_inference_instances }}"
+  loop_control:
+    label: "{{ item.name }} :{{ item.port }}"

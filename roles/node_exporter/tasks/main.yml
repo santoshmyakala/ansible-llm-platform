@@ -1,0 +1,25 @@
+---
+- name: Run node_exporter (host network and PID namespace, root filesystem read-only)
+  community.docker.docker_container:
+    name: node-exporter
+    image: "{{ platform_images.node_exporter }}"
+    network_mode: host
+    pid_mode: host
+    user: "65534:65534"
+    read_only: true
+    restart_policy: unless-stopped
+    volumes: ["/:/host:ro,rslave"]
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address={{ node_exporter_listen }}
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($|/)
+    labels:
+      llm-platform.component: node-exporter
+
+- name: Wait for node metrics
+  ansible.builtin.uri:
+    url: "http://{{ node_exporter_listen }}/metrics"
+  register: node_exporter_up
+  until: node_exporter_up.status == 200
+  retries: 20
+  delay: 2

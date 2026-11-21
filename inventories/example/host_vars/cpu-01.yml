@@ -1,0 +1,8 @@
+---
+platform_inference_instances:
+  - name: qwen1b5-cpu
+    model: qwen2.5-1.5b-instruct
+    port: 8081
+    ctx_size: 8192 # total context, shared by the parallel slots
+    parallel: 4
+    threads: 16

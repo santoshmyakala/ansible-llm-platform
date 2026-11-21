@@ -1,0 +1,47 @@
+---
+- name: Create the chat UI data directory
+  ansible.builtin.file:
+    path: "{{ chat_ui_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Run Open WebUI against the gateway
+  community.docker.docker_container:
+    name: chat-ui
+    image: "{{ platform_images.open_webui }}"
+    network_mode: host
+    restart_policy: unless-stopped
+    volumes:
+      - "{{ chat_ui_dir }}:/app/backend/data"
+    env:
+      HOST: "{{ chat_ui_listen }}"
+      PORT: "{{ platform_ports.chat_ui | string }}"
+      # The gateway is the only model provider; the UI holds its own team key.
+      OPENAI_API_BASE_URL: "{{ chat_ui_gateway_url }}"
+      OPENAI_API_KEY: "{{ (vault_gateway_teams | selectattr('name', 'equalto', platform_chat_ui_team) | first).key }}"
+      ENABLE_OLLAMA_API: "false"
+      # Configuration as code: environment wins over settings saved in the UI.
+      ENABLE_PERSISTENT_CONFIG: "false"
+      WEBUI_SECRET_KEY: "{{ vault_webui_secret_key }}"
+      # The admin account comes from the vault; nobody else can sign up, new users wait for approval.
+      WEBUI_ADMIN_EMAIL: "{{ vault_webui_admin_email }}"
+      WEBUI_ADMIN_PASSWORD: "{{ vault_webui_admin_password }}"
+      ENABLE_SIGNUP: "false"
+      DEFAULT_USER_ROLE: pending
+      # No model downloads from the internet at start-up; no document embedding.
+      OFFLINE_MODE: "true"
+      BYPASS_EMBEDDING_AND_RETRIEVAL: "true"
+      ENABLE_VERSION_UPDATE_CHECK: "false"
+    labels:
+      llm-platform.component: chat-ui
+  no_log: true # env holds keys
+
+- name: Wait for the chat UI
+  ansible.builtin.uri:
+    url: "http://{{ chat_ui_listen }}:{{ platform_ports.chat_ui }}/health"
+  register: chat_ui_health
+  until: chat_ui_health.status == 200
+  retries: "{{ chat_ui_health_retries }}"
+  delay: 5

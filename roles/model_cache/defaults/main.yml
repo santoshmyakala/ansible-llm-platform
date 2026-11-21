@@ -1,0 +1,4 @@
+---
+model_cache_dir: "{{ platform_base_dir }}/models"
+model_cache_download_timeout: 1800
+model_cache_hf_endpoint: https://huggingface.co

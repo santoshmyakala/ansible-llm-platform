@@ -1,0 +1,3 @@
+---
+nvidia_toolkit_repo: https://nvidia.github.io/libnvidia-container/stable/deb
+nvidia_toolkit_key_url: https://nvidia.github.io/libnvidia-container/gpgkey

@@ -1,0 +1,55 @@
+---
+# promtool unit tests for the alert logic (run by the role before Prometheus is (re)started).
+rule_files: [rules.yml]
+evaluation_interval: 1m
+
+tests:
+  - name: a failing backend alerts, the platform does not
+    interval: 1m
+    input_series:
+      - series: 'gateway_backend_up{backend="gpu-01-qwen7b"}'
+        values: "1 1 0 0 0 0 0"
+      - series: 'gateway_backend_up{backend="cpu-01-qwen1b5"}'
+        values: "1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ModelServerDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ModelServerDown
+        exp_alerts:
+          - exp_labels: {severity: warning, backend: gpu-01-qwen7b}
+            exp_annotations:
+              summary: "Backend gpu-01-qwen7b fails health checks; traffic is going to the others"
+      - eval_time: 5m
+        alertname: NoHealthyBackends
+        exp_alerts: []
+
+  - name: every backend down is critical
+    interval: 1m
+    input_series:
+      - series: 'gateway_backend_up{backend="a"}'
+        values: "0 0 0 0"
+      - series: 'gateway_backend_up{backend="b"}'
+        values: "0 0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: NoHealthyBackends
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "No model server is healthy: every request fails"
+
+  - name: the 5xx ratio is computed across teams and models
+    interval: 1m
+    input_series:
+      - series: 'gateway_requests_total{team="research",model="m",status="200"}'
+        values: "0+90x20"
+      - series: 'gateway_requests_total{team="ops",model="m",status="503"}'
+        values: "0+10x20"
+    promql_expr_test:
+      - expr: gateway:error_ratio:rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: "gateway:error_ratio:rate5m"
+            value: 0.1

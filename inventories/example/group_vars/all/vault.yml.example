@@ -1,0 +1,28 @@
+---
+# Copy to vault.yml, fill in, then: ansible-vault encrypt inventories/example/group_vars/all/vault.yml
+# Generate keys with: openssl rand -hex 32
+
+vault_backend_api_key: "CHANGE-ME-64-hex-chars"      # gateway -> inference backends (and Prometheus scrapes)
+vault_grafana_admin_password: "CHANGE-ME"
+vault_webui_secret_key: "CHANGE-ME-64-hex-chars"
+vault_webui_admin_email: "platform-admins@example.com"
+vault_webui_admin_password: "CHANGE-ME"
+vault_hf_token: ""                                    # only for gated Hugging Face models
+
+# Gateway teams. Keys are distributed to the teams; the gateway stores only their SHA-256.
+vault_gateway_teams:
+  - name: research
+    key: "CHANGE-ME-64-hex-chars"
+    requests_per_minute: 120
+    tokens_per_minute: 400000
+    models: ["*"]
+  - name: support-bot
+    key: "CHANGE-ME-64-hex-chars"
+    requests_per_minute: 600
+    tokens_per_minute: 1000000
+    models: [qwen2.5-1.5b-instruct]
+  - name: chat-ui
+    key: "CHANGE-ME-64-hex-chars"
+    requests_per_minute: 300
+    tokens_per_minute: 600000
+    models: ["*"]

@@ -1,0 +1,57 @@
+---
+- name: "Describe the source | {{ model_cache_key }}"
+  ansible.builtin.set_fact:
+    model_cache_spec: "{{ platform_models[model_cache_key] }}"
+    model_cache_url: >-
+      {{ model_cache_hf_endpoint }}/{{ platform_models[model_cache_key].hf_repo }}/resolve/{{
+         platform_models[model_cache_key].revision | default('main') }}/{{ platform_models[model_cache_key].hf_file }}
+    model_cache_headers: "{{ {'Authorization': 'Bearer ' ~ vault_hf_token} if vault_hf_token | default('') else {} }}"
+
+- name: "Ask Hugging Face for the file's published SHA-256 | {{ model_cache_key }}"
+  ansible.builtin.uri:
+    url: "{{ model_cache_url }}"
+    method: HEAD
+    follow_redirects: none
+    status_code: [200, 302, 307]
+    headers: "{{ model_cache_headers }}"
+  register: model_cache_head
+  when: not (model_cache_spec.sha256 | default(''))
+
+- name: "Choose the hash to verify against | {{ model_cache_key }}"
+  ansible.builtin.set_fact:
+    model_cache_sha256: >-
+      {{ (model_cache_spec.sha256 | default('')) or
+         (model_cache_head.x_linked_etag | default('') | replace('"', '') | replace('W/', '')) }}
+    model_cache_commit: "{{ model_cache_head.x_repo_commit | default(model_cache_spec.revision | default('main')) }}"
+
+- name: "Refuse to download without a verifiable hash | {{ model_cache_key }}"
+  ansible.builtin.assert:
+    that: model_cache_sha256 is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      No SHA-256 for {{ model_cache_spec.hf_repo }}/{{ model_cache_spec.hf_file }}: Hugging Face did not publish one
+      (got {{ model_cache_sha256 | default('nothing') }}). Pin `sha256` in platform_models.
+    quiet: true
+
+- name: "Create its directory | {{ model_cache_key }}"
+  ansible.builtin.file:
+    path: "{{ model_cache_dir }}/{{ model_cache_key }}"
+    state: directory
+    mode: "0755"
+
+- name: "Download and verify | {{ model_cache_key }}"
+  ansible.builtin.get_url:
+    url: "{{ model_cache_url }}"
+    dest: "{{ model_cache_dir }}/{{ model_cache_key }}/{{ model_cache_spec.hf_file }}"
+    checksum: "sha256:{{ model_cache_sha256 }}"
+    headers: "{{ model_cache_headers }}"
+    timeout: "{{ model_cache_download_timeout }}"
+    mode: "0644"
+
+- name: "Record where it came from | {{ model_cache_key }}"
+  ansible.builtin.copy:
+    dest: "{{ model_cache_dir }}/{{ model_cache_key }}/SOURCE.json"
+    content: >-
+      {{ {'repo': model_cache_spec.hf_repo, 'file': model_cache_spec.hf_file,
+          'revision': model_cache_spec.revision | default('main'), 'commit': model_cache_commit,
+          'sha256': model_cache_sha256} | to_nice_json(indent=2) }}
+    mode: "0644"

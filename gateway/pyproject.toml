@@ -1,0 +1,30 @@
+[project]
+name = "llm-gateway"
+version = "1.0.0"
+description = "Auditable OpenAI-compatible gateway for self-hosted LLM inference: hashed keys, per-team limits, failover, metrics."
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "fastapi==0.165.0",
+  "uvicorn==0.54.0",
+  "httpx==0.28.1",
+  "prometheus-client==0.26.0",
+  "pyyaml==6.0.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.2.0", "pytest-asyncio==1.5.0"]
+
+[project.scripts]
+llm-gateway = "llm_gateway.__main__:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["llm_gateway"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

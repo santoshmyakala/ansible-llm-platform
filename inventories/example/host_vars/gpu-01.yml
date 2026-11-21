@@ -1,0 +1,7 @@
+---
+platform_gpu_vendor: nvidia
+platform_inference_instances:
+  - name: qwen7b
+    model: qwen2.5-7b-instruct
+    port: 8081
+    gpu_memory_utilization: 0.90

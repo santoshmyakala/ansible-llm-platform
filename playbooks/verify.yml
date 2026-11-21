@@ -1,0 +1,293 @@
+---
+# End-to-end checks against a running platform. Safe to run any time; it changes nothing permanent
+# (the failover check stops one model server and starts it again).
+#   ansible-playbook -i inventories/<site> playbooks/verify.yml --ask-vault-pass
+
+- name: Verify the gateway serves real completions, enforces keys and limits, and fails over
+  hosts: gateway
+  gather_facts: false
+  roles:
+    - platform
+  vars:
+    verify_url: "http://{{ platform_address }}:{{ platform_ports.gateway_api }}"
+    verify_team: "{{ vault_gateway_teams | first }}"
+    verify_model: "{{ platform_models | list | first }}"
+    verify_auth: {Authorization: "Bearer {{ verify_team.key }}"}
+    verify_question:
+      model: "{{ verify_model }}"
+      temperature: 0
+      max_tokens: 16
+      messages:
+        - {role: user, content: "What is the capital of France? Answer with one word."}
+  tasks:
+    - name: Gateway is ready
+      ansible.builtin.uri:
+        url: "{{ verify_url }}/readyz"
+
+    - name: The model is listed for the team
+      ansible.builtin.uri:
+        url: "{{ verify_url }}/v1/models"
+        headers: "{{ verify_auth }}"
+      register: verify_models
+      failed_when: verify_model not in (verify_models.json.data | map(attribute='id'))
+      no_log: true
+
+    - name: Requests without a key, or with a wrong key, are refused
+      ansible.builtin.uri:
+        url: "{{ verify_url }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body: "{{ verify_question }}"
+        headers: "{{ item }}"
+        status_code: 401
+      loop:
+        - {}
+        - {Authorization: "Bearer not-a-real-key-000000000000000000"}
+      loop_control:
+        label: "{{ 'no key' if not item else 'wrong key' }}"
+
+    - name: A real model answers through the gateway
+      ansible.builtin.uri:
+        url: "{{ verify_url }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body: "{{ verify_question }}"
+        headers: "{{ verify_auth }}"
+        timeout: 120
+      register: verify_answer
+      no_log: true
+
+    - name: Show the answer and token usage
+      ansible.builtin.debug:
+        msg: >-
+          {{ verify_model }} answered {{ verify_answer.json.choices[0].message.content | trim | to_json }}
+          using {{ verify_answer.json.usage.prompt_tokens }} prompt + {{ verify_answer.json.usage.completion_tokens }} completion tokens
+
+    - name: The answer is right and usage is reported
+      ansible.builtin.assert:
+        that:
+          - "'paris' in (verify_answer.json.choices[0].message.content | lower)"
+          - verify_answer.json.usage.completion_tokens | int > 0
+        quiet: true
+
+    - name: Streaming returns server-sent events through to [DONE]
+      ansible.builtin.uri:
+        url: "{{ verify_url }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body: "{{ verify_question | combine({'stream': true}) }}"
+        headers: "{{ verify_auth }}"
+        return_content: true
+        timeout: 120
+      register: verify_stream
+      failed_when: >-
+        verify_stream.status != 200 or 'data: ' not in verify_stream.content
+        or '[DONE]' not in verify_stream.content
+      no_log: true
+
+    - name: Rate limiting (team with the lowest request limit)
+      vars:
+        verify_slow_team: "{{ vault_gateway_teams | sort(attribute='requests_per_minute') | first }}"
+      when: verify_slow_team.requests_per_minute <= 5
+      block:
+        - name: Send more requests than the team's per-minute limit
+          ansible.builtin.uri:
+            url: "{{ verify_url }}/v1/chat/completions"
+            method: POST
+            body_format: json
+            body: "{{ verify_question | combine({'max_tokens': 1}) }}"
+            headers: {Authorization: "Bearer {{ verify_slow_team.key }}"}
+            status_code: [200, 429]
+          register: verify_burst
+          loop: "{{ range(verify_slow_team.requests_per_minute + 2) | list }}"
+          no_log: true
+
+        - name: The gateway answered 429 once the limit was used up
+          ansible.builtin.assert:
+            that: 429 in (verify_burst.results | map(attribute='status') | list)
+            fail_msg: "statuses: {{ verify_burst.results | map(attribute='status') | list }}"
+            quiet: true
+
+    - name: Failover (when the model has at least two servers)
+      vars:
+        verify_servers: >-
+          {%- set out = [] -%}
+          {%- for host in groups.get('inference', []) -%}
+          {%-   for inst in hostvars[host].platform_inference_instances | default([]) if inst.model == verify_model -%}
+          {%-     set _ = out.append({'host': host, 'name': inst.name, 'port': inst.port}) -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ out }}
+        verify_victim: "{{ verify_servers | first }}"
+      when: verify_servers | length >= 2
+      block:
+        - name: Stop one model server
+          community.docker.docker_container:
+            name: "llm-{{ verify_victim.name }}"
+            state: stopped
+          delegate_to: "{{ verify_victim.host }}"
+          become: true
+
+        - name: Every request still succeeds
+          ansible.builtin.uri:
+            url: "{{ verify_url }}/v1/chat/completions"
+            method: POST
+            body_format: json
+            body: "{{ verify_question | combine({'max_tokens': 4}) }}"
+            headers: "{{ verify_auth }}"
+            timeout: 120
+          loop: "{{ range(6) | list }}"
+          no_log: true
+
+        - name: The gateway marks the stopped server unhealthy
+          ansible.builtin.uri:
+            url: "http://{{ platform_address }}:{{ platform_ports.gateway_metrics }}/metrics"
+            return_content: true
+          register: verify_metrics
+          until: >-
+            ('gateway_backend_up{backend="' ~ (verify_victim.host ~ '-' ~ verify_victim.name) | lower ~ '"} 0.0')
+            in verify_metrics.content
+          retries: 15
+          delay: 2
+
+        - name: Start it again
+          community.docker.docker_container:
+            name: "llm-{{ verify_victim.name }}"
+            state: started
+          delegate_to: "{{ verify_victim.host }}"
+          become: true
+
+        - name: The gateway brings it back into rotation
+          ansible.builtin.uri:
+            url: "http://{{ platform_address }}:{{ platform_ports.gateway_metrics }}/metrics"
+            return_content: true
+          register: verify_metrics
+          until: >-
+            ('gateway_backend_up{backend="' ~ (verify_victim.host ~ '-' ~ verify_victim.name) | lower ~ '"} 1.0')
+            in verify_metrics.content
+          retries: 60
+          delay: 3
+
+- name: Verify monitoring sees everything and alerts are loaded
+  hosts: monitoring
+  gather_facts: false
+  roles:
+    - platform
+  vars:
+    verify_prom: "http://127.0.0.1:{{ platform_ports.prometheus }}"
+    verify_grafana: "http://{{ platform_address }}:{{ platform_ports.grafana }}"
+  tasks:
+    - name: Every scrape target is up
+      ansible.builtin.uri:
+        url: "{{ verify_prom }}/api/v1/targets?state=active"
+      register: verify_targets
+      until: >-
+        verify_targets.json.data.activeTargets | length > 0 and
+        verify_targets.json.data.activeTargets | rejectattr('health', 'equalto', 'up') | list | length == 0
+      retries: 20
+      delay: 5
+
+    - name: Show the targets
+      ansible.builtin.debug:
+        msg: "{{ verify_targets.json.data.activeTargets | map(attribute='labels') | map(attribute='job') | list | sort }}"
+
+    - name: Recording and alerting rules are loaded
+      ansible.builtin.uri:
+        url: "{{ verify_prom }}/api/v1/rules"
+      register: verify_rules
+      failed_when: >-
+        ['llm-platform-recording', 'llm-platform-alerts']
+        | difference(verify_rules.json.data.groups | map(attribute='name')) | length > 0
+
+    - name: Model-server metrics arrive (tokens generated during the checks above)
+      ansible.builtin.uri:
+        url: "{{ verify_prom }}/api/v1/query?query={{ verify_tokens_query | urlencode }}"
+      vars:
+        verify_tokens_query: sum(llamacpp:tokens_predicted_total) or sum(vllm:generation_tokens_total)
+      register: verify_tokens
+      until: verify_tokens.json.data.result | length > 0 and (verify_tokens.json.data.result[0].value[1] | float) > 0
+      retries: 12
+      delay: 5
+
+    - name: Grafana is healthy, its data source works and the dashboard is provisioned
+      ansible.builtin.uri:
+        url: "{{ verify_grafana }}{{ item }}"
+        url_username: admin
+        url_password: "{{ vault_grafana_admin_password }}"
+        force_basic_auth: true
+      loop:
+        - /api/health
+        - /api/datasources/uid/prometheus/health
+        - /api/dashboards/uid/llm-platform
+      no_log: true
+
+- name: Verify the chat UI reaches the models through the gateway
+  hosts: chat_ui
+  gather_facts: false
+  roles:
+    - platform
+  vars:
+    verify_ui: "http://{{ platform_address }}:{{ platform_ports.chat_ui }}"
+  tasks:
+    - name: Sign in as the provisioned admin
+      ansible.builtin.uri:
+        url: "{{ verify_ui }}/api/v1/auths/signin"
+        method: POST
+        body_format: json
+        body: {email: "{{ vault_webui_admin_email }}", password: "{{ vault_webui_admin_password }}"}
+      register: verify_signin
+      no_log: true
+
+    - name: The UI lists the gateway's models
+      ansible.builtin.uri:
+        url: "{{ verify_ui }}/api/models"
+        headers: {Authorization: "Bearer {{ verify_signin.json.token }}"}
+      register: verify_ui_models
+      until: (platform_models | list | first) in (verify_ui_models.json.data | map(attribute='id') | list)
+      retries: 10
+      delay: 3
+      no_log: true
+
+- name: Verify host hardening is in effect
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the live firewall
+      ansible.builtin.command: nft list table inet llm_platform
+      register: verify_nft
+      changed_when: false
+      failed_when: "'policy drop' not in verify_nft.stdout"
+
+    - name: Read the effective sshd settings
+      ansible.builtin.command: sshd -T
+      register: verify_sshd
+      changed_when: false
+      failed_when: >-
+        'permitrootlogin no' not in verify_sshd.stdout or 'passwordauthentication no' not in verify_sshd.stdout
+
+    - name: List the platform's containers
+      community.docker.docker_host_info:
+        containers: true
+        containers_filters:
+          label: llm-platform.component
+      register: verify_containers
+
+    - name: Read each container's network settings
+      community.docker.docker_container_info:
+        name: "{{ item.Id }}"
+      loop: "{{ verify_containers.containers }}"
+      loop_control:
+        label: "{{ item.Names | first }}"
+      register: verify_inspect
+
+    - name: No container publishes ports (so the host firewall governs every one)
+      ansible.builtin.assert:
+        that:
+          - item.container.HostConfig.NetworkMode == 'host'
+          - item.container.HostConfig.PortBindings | default({}, true) | length == 0
+        fail_msg: "{{ item.container.Name }} bypasses the host firewall"
+        quiet: true
+      loop: "{{ verify_inspect.results }}"
+      loop_control:
+        label: "{{ item.container.Name }}"

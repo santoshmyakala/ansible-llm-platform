@@ -1,0 +1,17 @@
+---
+- name: Create the model cache
+  ansible.builtin.file:
+    path: "{{ model_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Fetch each llama.cpp model this host serves
+  ansible.builtin.include_tasks: fetch.yml
+  loop: >-
+    {{ platform_inference_instances | map(attribute='model') | unique
+       | select('in', platform_models | dict2items | selectattr('value.engine', 'equalto', 'llamacpp')
+                       | map(attribute='key') | list) | list }}
+  loop_control:
+    loop_var: model_cache_key

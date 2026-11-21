@@ -1,0 +1,11 @@
+---
+llm_gateway_dir: "{{ platform_base_dir }}/gateway"
+llm_gateway_source: "{{ playbook_dir }}/../gateway"
+llm_gateway_image: llm-gateway:local
+llm_gateway_bind_address: "{{ platform_address }}"
+llm_gateway_uid: 10001
+llm_gateway_connect_timeout: 2
+llm_gateway_read_timeout: 300
+llm_gateway_health_interval: 5
+llm_gateway_unhealthy_after: 2
+llm_gateway_max_body_bytes: 1048576

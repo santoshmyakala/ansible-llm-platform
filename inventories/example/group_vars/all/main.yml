@@ -1,0 +1,36 @@
+---
+# Platform-wide settings. Secrets live in vault.yml (see vault.yml.example).
+platform_base_dir: /opt/llm-platform
+
+# Who may reach what. SSH and Grafana: admin networks. Gateway API and chat UI: client networks.
+# Inference ports, gateway metrics and node metrics are reachable only from the gateway and
+# monitoring hosts; the firewall rules are generated from the inventory groups.
+platform_admin_networks: [10.20.0.0/28]
+platform_client_networks: [10.30.0.0/16]
+
+# Model catalog. Instances (host_vars) refer to these keys; the key is the model name clients use.
+platform_models:
+  qwen2.5-7b-instruct:
+    engine: vllm # NVIDIA GPUs
+    hf_model: Qwen/Qwen2.5-7B-Instruct
+    max_model_len: 16384
+  qwen2.5-1.5b-instruct:
+    engine: llamacpp # CPU, or GPU offload on NVIDIA (CUDA) and AMD/Intel (Vulkan)
+    hf_repo: Qwen/Qwen2.5-1.5B-Instruct-GGUF
+    hf_file: qwen2.5-1.5b-instruct-q4_k_m.gguf
+    revision: main
+    sha256: "" # pin in production; empty = verify against the SHA-256 Hugging Face publishes for the file
+
+# Image versions, ports and other defaults: roles/platform/defaults/main.yml (override here if needed).
+
+# Service levels the alerts are built from.
+platform_slo:
+  ttft_p95_seconds: 2.0
+  error_ratio: 0.02
+  queue_depth: 8
+
+# Where alerts go. Empty = alerts are visible in Prometheus/Alertmanager only.
+platform_alert_webhook_url: ""
+
+# The gateway team whose key the chat UI uses.
+platform_chat_ui_team: chat-ui

@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Santoshkumar Myakala
+  description: Open WebUI in front of the gateway, configured entirely from the inventory.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

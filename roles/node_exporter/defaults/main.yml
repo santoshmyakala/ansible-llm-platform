@@ -1,0 +1,2 @@
+---
+node_exporter_listen: "{{ platform_address }}:{{ platform_ports.node_exporter }}"

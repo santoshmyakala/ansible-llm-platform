@@ -1,0 +1,59 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+#
+# Host firewall for {{ inventory_hostname }}. Everything inbound is dropped unless listed here.
+# Only table `inet llm_platform` is managed: it is declared, deleted and recreated atomically, so a
+# reload never touches the tables Docker maintains. All platform containers use host networking,
+# so their ports are governed by this INPUT chain (published ports would bypass it via DNAT).
+{%- set monitoring = groups.get('monitoring', []) | map('extract', hostvars, 'platform_address') | list %}
+{%- set gateways = groups.get('gateway', []) | map('extract', hostvars, 'platform_address') | list %}
+{%- set chat_uis = groups.get('chat_ui', []) | map('extract', hostvars, 'platform_address') | list %}
+{%- set rules = [] %}
+{%- set _ = rules.append({'port': hardening_ssh_port, 'sources': platform_admin_networks, 'comment': 'ssh from admin networks'}) %}
+{%- set _ = rules.append({'port': platform_ports.node_exporter, 'sources': monitoring, 'comment': 'node metrics from monitoring'}) %}
+{%- if inventory_hostname in groups.get('inference', []) %}
+{%-   for inst in platform_inference_instances %}
+{%-     set _ = rules.append({'port': inst.port, 'sources': gateways + monitoring, 'comment': 'inference ' ~ inst.name ~ ' from gateway and monitoring'}) %}
+{%-   endfor %}
+{%- endif %}
+{%- if inventory_hostname in groups.get('gateway', []) %}
+{%-   set _ = rules.append({'port': platform_ports.gateway_api, 'sources': platform_client_networks + chat_uis, 'comment': 'gateway api from clients and chat ui'}) %}
+{%-   set _ = rules.append({'port': platform_ports.gateway_metrics, 'sources': monitoring, 'comment': 'gateway metrics from monitoring'}) %}
+{%- endif %}
+{%- if inventory_hostname in groups.get('monitoring', []) %}
+{%-   set _ = rules.append({'port': platform_ports.grafana, 'sources': platform_admin_networks, 'comment': 'grafana from admin networks'}) %}
+{%- endif %}
+{%- if inventory_hostname in groups.get('chat_ui', []) %}
+{%-   set _ = rules.append({'port': platform_ports.chat_ui, 'sources': platform_client_networks, 'comment': 'chat ui from clients'}) %}
+{%- endif %}
+{%- for extra in hardening_firewall_extra_rules %}
+{%-   set _ = rules.append(extra) %}
+{%- endfor %}
+
+table inet llm_platform
+delete table inet llm_platform
+
+table inet llm_platform {
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		ct state established,related accept
+		ct state invalid drop
+		iifname "lo" accept
+		meta l4proto { icmp, ipv6-icmp } accept
+{% for rule in rules %}
+{%   set v4 = rule.sources | map('string') | reject('search', ':') | unique | list %}
+{%   set v6 = rule.sources | map('string') | select('search', ':') | unique | list %}
+{%   if v4 %}
+		ip saddr { {{ v4 | join(', ') }} } {{ rule.proto | default('tcp') }} dport {{ rule.port }} accept comment "{{ rule.comment | default('extra') }}"
+{%   endif %}
+{%   if v6 %}
+		ip6 saddr { {{ v6 | join(', ') }} } {{ rule.proto | default('tcp') }} dport {{ rule.port }} accept comment "{{ rule.comment | default('extra') }}"
+{%   endif %}
+{% endfor %}
+{% if hardening_firewall_log_drops %}
+
+		limit rate 10/minute burst 20 packets log prefix "llm-platform drop: "
+{% endif %}
+	}
+}

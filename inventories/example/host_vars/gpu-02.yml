@@ -1,0 +1,9 @@
+---
+platform_gpu_vendor: amd
+platform_inference_instances:
+  - name: qwen1b5-gpu
+    model: qwen2.5-1.5b-instruct
+    port: 8081
+    gpu_layers: 999 # offload every layer to the GPU (Vulkan)
+    ctx_size: 16384
+    parallel: 8

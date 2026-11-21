@@ -1,0 +1,33 @@
+---
+hardening_ssh_port: 22
+hardening_firewall_enabled: true
+hardening_firewall_log_drops: true
+# Extra rules: [{port: 443, proto: tcp, sources: ["10.0.0.0/8"], comment: "ingress"}]
+hardening_firewall_extra_rules: []
+# Refuse to enable the firewall if the SSH session itself would be cut off.
+hardening_lockout_check: true
+
+hardening_unattended_upgrades: true
+# Never upgrade the container engine or GPU stack unattended: it restarts every model server.
+hardening_upgrade_blocklist:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - nvidia-
+  - libnvidia-
+  - cuda-
+
+hardening_sysctl:
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv6.conf.all.accept_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.tcp_syncookies: 1
+  kernel.kptr_restrict: 2
+  kernel.dmesg_restrict: 1
+  kernel.yama.ptrace_scope: 1
+  fs.protected_hardlinks: 1
+  fs.protected_symlinks: 1
+  fs.suid_dumpable: 0

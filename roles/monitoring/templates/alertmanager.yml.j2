@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+route:
+  receiver: {{ 'webhook' if platform_alert_webhook_url else 'nowhere' }}
+  group_by: [alertname, model, backend, node]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  # Alerts stay visible in Prometheus and Alertmanager even when no receiver is configured.
+  - name: nowhere
+{% if platform_alert_webhook_url %}
+  - name: webhook
+    webhook_configs:
+      - url: "{{ platform_alert_webhook_url }}"
+        send_resolved: true
+{% endif %}
+
+inhibit_rules:
+  # When nothing is healthy, the per-backend alerts are noise.
+  - source_matchers: [alertname = NoHealthyBackends]
+    target_matchers: [alertname = ModelServerDown]

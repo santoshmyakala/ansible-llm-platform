@@ -1,0 +1,72 @@
+---
+- name: Gather installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Decide whether to install Docker CE
+  ansible.builtin.set_fact:
+    docker_engine_install: >-
+      {{ not (docker_engine_reuse_existing and
+              ('docker-ce' in ansible_facts.packages or 'moby-engine' in ansible_facts.packages)) }}
+
+- name: Install Docker CE from Docker's repository
+  when: docker_engine_install | bool
+  block:
+    - name: Remove distribution packages that conflict with Docker CE
+      ansible.builtin.apt:
+        name: "{{ docker_engine_conflicting_packages | select('in', ansible_facts.packages) | list }}"
+        state: absent
+      when: docker_engine_conflicting_packages | select('in', ansible_facts.packages) | list | length > 0
+
+    - name: Create the APT keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker's repository (signed-by its own key)
+      ansible.builtin.deb822_repository:
+        name: docker
+        types: [deb]
+        uris: https://download.docker.com/linux/ubuntu
+        suites: ["{{ ansible_facts.distribution_release }}"]
+        components: [stable]
+        architectures: ["{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'amd64' }}"]
+        signed_by: https://download.docker.com/linux/ubuntu/gpg
+
+    - name: Install the Docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_engine_packages }}"
+        state: present
+        update_cache: true
+
+- name: Install the Python HTTP library the Docker modules use
+  ansible.builtin.apt:
+    name: python3-requests
+    state: present
+
+- name: Read the current daemon.json
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: docker_engine_current
+  failed_when: false
+
+- name: Write daemon.json (existing keys kept, ours merged on top)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: >-
+      {{ ((docker_engine_current.content | b64decode | from_json) if docker_engine_current.content is defined else {})
+         | combine(docker_engine_daemon_config, recursive=true) | to_nice_json(indent=2) }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart docker
+
+- name: Start Docker and enable it at boot
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Apply daemon changes before containers are created
+  ansible.builtin.meta: flush_handlers

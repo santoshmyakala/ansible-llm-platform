@@ -1,0 +1,48 @@
+---
+- name: "Choose the llama.cpp build for this host's GPU | {{ inference_item.name }}"
+  ansible.builtin.set_fact:
+    inference_image: >-
+      {{ platform_images.llamacpp_cuda if platform_gpu_vendor == 'nvidia'
+         else platform_images.llamacpp_vulkan if platform_gpu_vendor in ['amd', 'intel']
+         else platform_images.llamacpp_cpu }}
+    inference_gpu_layers: "{{ inference_item.gpu_layers | default(0 if platform_gpu_vendor == 'none' else 999) }}"
+    inference_file: "{{ platform_models[inference_item.model].hf_file }}"
+    # Without an explicit thread count, the host's vCPUs are split evenly between its instances.
+    inference_default_threads: "{{ [1, ansible_facts.processor_vcpus // ([1, platform_inference_instances | length] | max)] | max }}"
+    # Vulkan needs the container user in the host's render/video groups to open /dev/dri.
+    inference_gpu_groups: >-
+      {{ (['render', 'video'] | select('in', ansible_facts.getent_group | default({})) | map('extract', ansible_facts.getent_group)
+         | map(attribute=1) | list) if platform_gpu_vendor in ['amd', 'intel'] else [] }}
+
+- name: "Run llama.cpp | {{ inference_item.name }}"
+  community.docker.docker_container:
+    name: "llm-{{ inference_item.name }}"
+    image: "{{ inference_image }}"
+    network_mode: host
+    user: "65534:65534"
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart_policy: unless-stopped
+    volumes:
+      - "{{ inference_model_dir }}/{{ inference_item.model }}:/models:ro"
+      - "{{ inference_dir }}/backend.key:/run/secrets/backend.key:ro"
+    devices: "{{ ['/dev/dri:/dev/dri'] if platform_gpu_vendor in ['amd', 'intel'] else omit }}"
+    groups: "{{ inference_gpu_groups if inference_gpu_groups | length > 0 else omit }}"
+    device_requests: >-
+      {{ [{'driver': 'nvidia', 'count': -1, 'capabilities': [['gpu']]}] if platform_gpu_vendor == 'nvidia' else omit }}
+    command: >-
+      {{ ['--model', '/models/' ~ inference_file,
+          '--alias', inference_item.model,
+          '--host', inference_bind_address,
+          '--port', inference_item.port | string,
+          '--ctx-size', inference_item.ctx_size | default(4096) | string,
+          '--parallel', inference_item.parallel | default(4) | string,
+          '--threads', inference_item.threads | default(inference_default_threads) | string,
+          '--n-gpu-layers', inference_gpu_layers | string,
+          '--api-key-file', '/run/secrets/backend.key',
+          '--metrics', '--no-webui']
+         + (inference_item.extra_args | default([])) }}
+    labels:
+      llm-platform.component: inference
+      llm-platform.engine: llamacpp
+      llm-platform.model: "{{ inference_item.model }}"

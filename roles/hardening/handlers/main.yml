@@ -1,0 +1,12 @@
+---
+- name: Reload sshd
+  # Ubuntu 24.04 starts sshd through socket activation; reload only if the service is running.
+  # systemd_service has no try-reload-or-restart; reloading an inactive socket-activated unit would fail.
+  ansible.builtin.command: systemctl try-reload-or-restart ssh.service # noqa: command-instead-of-module
+  changed_when: true
+
+- name: Reload firewall
+  ansible.builtin.systemd_service:
+    name: llm-platform-firewall.service
+    state: reloaded
+    daemon_reload: true

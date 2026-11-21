@@ -1,0 +1,7 @@
+# Generated secrets (CI) and local vault passwords
+inventories/ci/group_vars/all/secrets.yml
+.vault-password*
+*.retry
+__pycache__/
+.pytest_cache/
+benchmark-*.json
