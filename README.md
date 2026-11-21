@@ -129,6 +129,21 @@ Their logic is unit-tested with `promtool test rules`. The Grafana dashboard has
 | **verify.yml** | The real model answers correctly through the gateway, and streaming works. Missing or wrong keys get 401, and a low-limit team gets 429. **One model server is stopped mid-test and every request still succeeds.** All Prometheus targets are up and the rules are loaded. Grafana's data source and dashboard work. The chat UI signs in and lists the gateway's models. The firewall and SSH hardening are live, and no container publishes a port. |
 | **Benchmark** | Time to first token and tokens per second through the gateway, measured on the runner's CPU and published in the job summary |
 
+### Measured in CI
+
+From [run 44875341942](https://github.com/santoshmyakala/ansible-llm-platform/actions/runs/44875341942) on a GitHub-hosted runner: AMD EPYC 7763, 4 vCPU, 15 GiB, no GPU.
+
+- **First run:** 76 tasks, 0 failed. **Second run: 0 changed.**
+- **The model's answer** to "What is the capital of France?", through the gateway: `Paris`, using 41 prompt and 2 completion tokens.
+- **Benchmark:** Qwen2.5-0.5B-Instruct (Q4_K_M) on two llama.cpp servers with 2 threads and 2 slots each, behind the gateway. 8 streamed requests of up to 128 tokens per level:
+
+| Concurrency | Requests OK | TTFT p50 | TTFT p95 | Decode tok/s per request | Aggregate tok/s |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 8/8 | 0.03 s | 0.43 s | 50.1 | 47.7 |
+| 4 | 8/8 | 0.07 s | 0.11 s | 16.9 | 66.5 |
+
+These numbers describe a small model on 4 shared CPU cores and nothing more. Re-run `scripts/benchmark.py` against your own nodes; every CI run publishes a fresh table in its job summary.
+
 **Not exercised in CI:** the NVIDIA (vLLM, CUDA) and AMD/Intel (Vulkan) paths, because GitHub runners have no GPU, and installing Docker from scratch, because runners already have it. These are linted and rendered, and their image tags, flags and metric names were checked against the pinned upstream sources.
 
 ## Repository layout
